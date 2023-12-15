@@ -1,3 +1,4 @@
 /target
 .direnv
 result
+tarpaulin-report.html

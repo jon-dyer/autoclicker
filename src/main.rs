@@ -1,17 +1,17 @@
 pub mod args;
-pub mod device;
+
 
 use std::{
     fs::{self, File},
     io::Read,
 };
 
-use clap::Parser;
-use theclicker::State;
-
 use crate::args::Args;
+use clap::Parser;
+use theclicker::{State, device::DeviceType};
 
 fn main() {
+    env_logger::init();
     let Args {
         clear_cache,
         mut cooldown,
@@ -20,7 +20,6 @@ fn main() {
         mut right_bind,
         mut find_keycodes,
         mut no_beep,
-        mut debug,
         mut no_grab,
         mut use_device,
         mut grab_kbd,
@@ -44,7 +43,6 @@ fn main() {
             right_bind,
             find_keycodes,
             no_beep,
-            debug,
             no_grab,
             grab_kbd,
             use_device,
@@ -52,20 +50,31 @@ fn main() {
     }
 
     let beep = !no_beep;
-    let grab = !no_grab;
+    let device = theclicker::mk_device(use_device);
 
-    let state = State::new(theclicker::StateArgs {
+    let input: theclicker::GrabbedInput = theclicker::grab_input(device, !no_grab, grab_kbd);
+
+    let left_bind: u16 = left_bind.unwrap_or(match input.0.ty {
+        DeviceType::Mouse => 275,
+        DeviceType::Keyboard => 26,
+    });
+
+    let right_bind: u16 = right_bind.unwrap_or(match input.0.ty {
+        DeviceType::Mouse => 276,
+        DeviceType::Keyboard => 27,
+    });
+
+    println!("Using: {}", input.0.name);
+
+    let state = State::new(
         cooldown,
         cooldown_press_release,
         left_bind,
         right_bind,
         find_keycodes,
         beep,
-        debug,
-        grab,
-        use_device,
-        grab_kbd,
-    });
+        input,
+    );
 
     println!();
     println!("Cooldown is {}ms!", cooldown);
@@ -74,5 +83,5 @@ fn main() {
         cooldown_press_release
     );
 
-    state.main_loop();
+    state.start();
 }

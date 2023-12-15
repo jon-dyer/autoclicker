@@ -31,9 +31,6 @@ pub struct Args {
     #[arg(short, long, default_value_t = false)]
     pub no_beep: bool,
 
-    #[arg(long, default_value_t = false)]
-    pub debug: bool,
-
     // Grabs the input device and emulates any unused action from it
     #[arg(long, default_value_t = false)]
     pub no_grab: bool,

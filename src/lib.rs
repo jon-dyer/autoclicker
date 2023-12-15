@@ -1,5 +1,7 @@
+#![feature(test)]
 pub mod args;
-mod device;
+mod click_toggle;
+pub mod device;
 
 use std::{
     io::{stdout, IsTerminal},
@@ -10,150 +12,116 @@ use std::{
 };
 
 use crate::device::Device;
+use click_toggle::ClickToggle;
 use input_linux::{sys::input_event, Key, KeyState};
-
 const ANSI_BEEP: &str = "\x07";
+const OPEN_ESCAPE: &str = "\x1b[0K";
+const CLOSE_ESCAPE: &str = "\x1b[1F";
 
-#[derive(Default)]
-pub struct ToggleStates {
-    // Primary click
-    left: bool,
-
-    // Secondary click
-    right: bool,
-}
-
-pub struct StateArgs {
-    pub cooldown: u64,
-    pub cooldown_press_release: u64,
-    pub left_bind: Option<u16>,
-    pub right_bind: Option<u16>,
-    pub find_keycodes: bool,
-    pub beep: bool,
-    pub debug: bool,
-    pub grab: bool,
-    pub grab_kbd: bool,
-    pub use_device: Option<String>,
+enum Click {
+    Left,
+    Right,
 }
 
 pub struct State {
-    input: Device,
+    input: Arc<Device>,
     output: Arc<Device>,
 
-    left_auto_clicker_bind: u16,
-    right_auto_clicker_bind: u16,
+    left_bind: u16,
+    right_bind: u16,
 
     cooldown: Duration,
-    cooldown_pr: Duration,
-    debug: bool,
+    release_cooldown: Duration,
     find_keycodes: bool,
 
     beep: bool,
 }
 
-impl State {
-    pub fn new(
-        StateArgs {
-            cooldown,
-            cooldown_press_release,
-            left_bind,
-            right_bind,
-            find_keycodes,
-            beep,
-            debug,
-            grab,
-            use_device,
-            grab_kbd,
-        }: StateArgs,
-    ) -> Self {
-        let input;
-
-        if let Some(device_name) = use_device {
-            if let Some(device) = Device::find_device(&device_name) {
-                input = device;
-            } else {
-                eprintln!("Cannot find device: {device_name}");
-                std::process::exit(1);
-            }
+pub fn mk_device(chosen_device: Option<String>) -> Device {
+    if let Some(name) = chosen_device {
+        if let Some(device) = Device::find_device(&name) {
+            device
         } else {
-            input = Device::select_device();
+            eprintln!("Cannot find device: {name}");
+            std::process::exit(1);
         }
+    } else {
+        Device::select_device()
+    }
+}
 
-        println!("Using: {}", input.name);
+pub fn grab_input(input: Device, grab: bool, grab_kbd: bool) -> GrabbedInput {
+    let output = Device::uinput_open(PathBuf::from("/dev/uinput"), "TheClicker").unwrap();
+    output.add_mouse_attributes();
 
-        let output = Device::uinput_open(PathBuf::from("/dev/uinput"), "TheClicker").unwrap();
-        output.add_mouse_attributes();
-
-        if grab {
-            if input.ty.is_keyboard() && !grab_kbd {
-                eprintln!("Grab mode is disabled for keyboard!");
-                eprintln!("You can use --grab-kbd to override that");
-            } else {
-                output.copy_attributes(&input);
-                input.grab(true).expect("Cannot grab the input device!");
-            }
-        }
-
-        output.create();
-
-        let left_bind = left_bind.unwrap_or(match input.ty {
-            device::DeviceType::Mouse => 275,
-            device::DeviceType::Keyboard => 26,
-        });
-
-        let right_bind = right_bind.unwrap_or(match input.ty {
-            device::DeviceType::Mouse => 276,
-            device::DeviceType::Keyboard => 27,
-        });
-
-        Self {
-            input,
-            output: Arc::new(output),
-
-            left_auto_clicker_bind: left_bind,
-            right_auto_clicker_bind: right_bind,
-
-            cooldown: Duration::from_millis(cooldown),
-            debug,
-            find_keycodes,
-            beep,
-            cooldown_pr: Duration::from_millis(cooldown_press_release),
+    if grab {
+        if input.ty.is_keyboard() && !grab_kbd {
+            eprintln!("Grab mode is disabled for keyboard!");
+            eprintln!("You can use --grab-kbd to override that");
+        } else {
+            output.copy_attributes(&input);
+            input.grab(true).expect("Cannot grab the input device!");
         }
     }
-    pub fn main_loop(self) {
-        let (transmitter, receiver) = mpsc::channel();
+
+    output.create();
+    GrabbedInput(input, output)
+}
+
+pub struct GrabbedInput(pub Device, pub Device);
+
+impl State {
+    pub fn new(
+        cooldown: u64,
+        cooldown_press_release: u64,
+        left_bind: u16,
+        right_bind: u16,
+        find_keycodes: bool,
+        beep: bool,
+        GrabbedInput(input, output): GrabbedInput,
+    ) -> Self {
+        Self {
+            input: Arc::new(input),
+            output: Arc::new(output),
+
+            left_bind,
+            right_bind,
+
+            cooldown: Duration::from_millis(cooldown),
+            find_keycodes,
+            beep,
+            release_cooldown: Duration::from_millis(cooldown_press_release),
+        }
+    }
+
+    pub fn start(self) {
+        let (tx, rx): (mpsc::Sender<Click>, mpsc::Receiver<Click>) = mpsc::channel();
 
         let mut events: [input_event; 1] = unsafe { std::mem::zeroed() };
-        let input = self.input;
-        let output = self.output.clone();
+        let input: Arc<Device> = self.input.clone();
+        let output: Arc<Device> = self.output.clone();
 
-        let debug = self.debug;
         let find_keycodes = self.find_keycodes;
 
-        let left_bind = self.left_auto_clicker_bind;
-        let right_bind = self.right_auto_clicker_bind;
-
-        if let Ok(key) = Key::from_code(left_bind) {
-            println!("Left bind code: {left_bind}, key: {key:?}");
+        if let Ok(key) = Key::from_code(self.left_bind) {
+            println!("Left bind code: {}, key: {key:?}", self.left_bind);
         } else {
-            println!("Left bind code: {left_bind}");
+            println!("Left bind code: {}", self.left_bind);
         }
 
-        if let Ok(key) = Key::from_code(right_bind) {
-            println!("Right bind code: {right_bind}, key: {key:?}");
+        if let Ok(key) = Key::from_code(self.right_bind) {
+            println!("Right bind code: {}, key: {key:?}", self.right_bind);
         } else {
-            println!("Right bind code: {right_bind}");
+            println!("Right bind code: {}", self.right_bind);
         }
 
-        let mut states = ToggleStates::default();
+        let mut states = ClickToggle::default();
 
         thread::spawn(move || loop {
             input.read(&mut events).unwrap();
 
             for event in events.iter() {
-                if debug {
-                    println!("Event: {:?}", event);
-                }
+                log::debug!("Event: {:?}", event);
 
                 if find_keycodes && event.value == 1 {
                     if let Ok(key) = Key::from_code(event.code) {
@@ -165,19 +133,19 @@ impl State {
 
                 let mut used = false;
                 let pressed = event.value == 1;
-                if event.code == left_bind {
-                    if pressed && !states.left && !find_keycodes {
-                        transmitter.send(1).unwrap();
+                if event.code == self.left_bind {
+                    if pressed && states.not_left() && !find_keycodes {
+                        tx.send(Click::Left).unwrap();
                     }
-                    states.left = pressed;
+                    states = states.set_left(pressed);
                     used = true;
                 }
 
-                if event.code == right_bind {
-                    if pressed && !states.right && !find_keycodes {
-                        transmitter.send(2).unwrap();
+                if event.code == self.right_bind {
+                    if pressed && states.not_right() && !find_keycodes {
+                        tx.send(Click::Right).unwrap();
                     }
-                    states.right = pressed;
+                    states = states.set_right(pressed);
                     used = true;
                 }
 
@@ -189,75 +157,91 @@ impl State {
             }
         });
 
-        let mut toggle = ToggleStates::default();
-        let beep = self.beep;
+        self.event_receiver(rx);
+    }
+
+    fn event_receiver(self, receiver: mpsc::Receiver<Click>) {
+        let mut auto_clicking: ClickToggle = ClickToggle::default();
         println!();
-        print_active(&toggle);
-
-        let output = self.output;
+        print_active(&auto_clicking);
         loop {
-            if let Some(recv) = if toggle.left | toggle.right {
-                receiver.try_recv().ok()
-            } else {
-                receiver.recv().ok()
+            if let Some(received_click) = match &auto_clicking {
+                ClickToggle::Neither => receiver.recv().ok(),
+                ClickToggle::Left | ClickToggle::Right | ClickToggle::Both => {
+                    receiver.try_recv().ok()
+                }
             } {
-                if recv == 1 {
-                    toggle.left = !toggle.left;
-                }
-                if recv == 2 {
-                    toggle.right = !toggle.right;
-                }
+                auto_clicking = match received_click {
+                    Click::Left => auto_clicking.toggle_left(),
+                    Click::Right => auto_clicking.toggle_right(),
+                };
 
-                if beep {
+                if self.beep {
                     print!("{}", ANSI_BEEP);
                 }
 
-                print_active(&toggle);
+                print_active(&auto_clicking);
             }
 
-            if toggle.left {
-                output.send_key(Key::ButtonLeft, KeyState::PRESSED);
-            }
-            if toggle.right {
-                output.send_key(Key::ButtonRight, KeyState::PRESSED);
-            }
-
-            if !self.cooldown_pr.is_zero() {
-                thread::sleep(self.cooldown_pr);
-            }
-
-            if toggle.left {
-                output.send_key(Key::ButtonLeft, KeyState::RELEASED);
+            match auto_clicking {
+                ClickToggle::Left => self.output.send_key(Key::ButtonLeft, KeyState::PRESSED),
+                ClickToggle::Right => self.output.send_key(Key::ButtonRight, KeyState::PRESSED),
+                ClickToggle::Both => {
+                    self.output.send_key(Key::ButtonLeft, KeyState::PRESSED);
+                    self.output.send_key(Key::ButtonRight, KeyState::PRESSED);
+                }
+                ClickToggle::Neither => (),
             }
 
-            if toggle.right {
-                output.send_key(Key::ButtonRight, KeyState::RELEASED);
+            match self.release_cooldown {
+                Duration::ZERO => (),
+                release_cooldown => thread::sleep(release_cooldown),
             }
+
+            match auto_clicking {
+                ClickToggle::Left => self.output.send_key(Key::ButtonLeft, KeyState::RELEASED),
+                ClickToggle::Right => self.output.send_key(Key::ButtonRight, KeyState::RELEASED),
+                ClickToggle::Both => {
+                    self.output.send_key(Key::ButtonLeft, KeyState::RELEASED);
+                    self.output.send_key(Key::ButtonRight, KeyState::RELEASED);
+                }
+                ClickToggle::Neither => (),
+            }
+
             thread::sleep(self.cooldown);
         }
     }
 }
 
-fn print_active(toggle: &ToggleStates) {
-    let is_terminal: bool = stdout().is_terminal();
+fn print_active(toggle: &ClickToggle) {
+    reprint(&format!("Active: {}\n", toggle));
+}
 
-    if is_terminal {
-        print!("\x1b[0K");
+#[inline]
+fn reprint(text: &str) {
+    if stdout().is_terminal() {
+        print!("{}{}{}", OPEN_ESCAPE, text, CLOSE_ESCAPE);
+    } else {
+        print!("{}", text);
     }
+}
 
-    print!("Active: ");
-    if toggle.left {
-        print!("left")
-    }
-    if toggle.right {
-        if toggle.left {
-            print!(", ")
-        }
-        print!("right")
-    }
-    println!();
+#[cfg(test)]
+mod tests {
+    use gag::BufferRedirect;
+    use std::io::Read;
 
-    if is_terminal {
-        print!("\x1b[1F");
+    use super::*;
+
+    #[test]
+    fn print_active_whole_thing() {
+        let mut buf = BufferRedirect::stdout().unwrap();
+
+        print_active(&ClickToggle::Left);
+
+        let mut output: String = String::new();
+        buf.read_to_string(&mut output).unwrap();
+
+        assert_eq!(&output[..], "Active: left\n");
     }
 }

@@ -1,3 +1,4 @@
+
 use std::{
     fs::{self, File},
     io::{self, Write},
@@ -115,7 +116,7 @@ impl Device {
         }
     }
 
-    /// Only copis attributes from DevInput to UInput
+    // Only copies attributes from DevInput to UInput
     pub fn copy_attributes(&self, from: &Device) {
         match (&self.handler, &from.handler) {
             (UInputOrDev::Uinput(to), UInputOrDev::DevInput(from)) => {
@@ -175,6 +176,7 @@ impl Device {
             UInputOrDev::DevInput(_) => todo!(),
         }
     }
+
     pub fn read(&self, events: &mut [input_event]) -> io::Result<usize> {
         match &self.handler {
             UInputOrDev::Uinput(device) => device.read(events),
@@ -199,7 +201,7 @@ impl Device {
     pub fn devices() -> Vec<Device> {
         fs::read_dir("/dev/input/by-id")
             .unwrap()
-            .filter_map(|res| res.ok())
+            .filter_map(Result::ok)
             .filter_map(|entry| {
                 Device::dev_open(entry.path(), {
                     let file_name = entry.file_name().into_string().unwrap();
@@ -264,7 +266,7 @@ impl Device {
             };
 
             if num >= devices.len() {
-                println!("Is to large!");
+                println!("Is too large!");
                 continue;
             }
 
