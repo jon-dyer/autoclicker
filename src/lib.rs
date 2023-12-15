@@ -12,12 +12,14 @@ use std::{
 use crate::device::Device;
 use input_linux::{sys::input_event, Key, KeyState};
 
+const ANSI_BEEP: &str = "\x07";
+
 #[derive(Default)]
 pub struct ToggleStates {
-    ///Primary click
+    // Primary click
     left: bool,
 
-    //Secundary click
+    // Secondary click
     right: bool,
 }
 
@@ -207,8 +209,7 @@ impl State {
                 }
 
                 if beep {
-                    // ansi beep sound
-                    print!("\x07");
+                    print!("{}", ANSI_BEEP);
                 }
 
                 print_active(&toggle);
@@ -238,7 +239,7 @@ impl State {
 }
 
 fn print_active(toggle: &ToggleStates) {
-    let is_terminal = stdout().is_terminal();
+    let is_terminal: bool = stdout().is_terminal();
 
     if is_terminal {
         print!("\x1b[0K");
