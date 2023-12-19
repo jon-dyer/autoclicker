@@ -180,6 +180,38 @@ mod tests {
         fn left_is_not_right() {
             assert!(ClickToggle::Left.not_right());
         }
+
+        #[test]
+        fn set_lefts_will_change() {
+            assert_eq!(ClickToggle::Left, ClickToggle::Neither.set_left(true));
+            assert_eq!(ClickToggle::Both, ClickToggle::Right.set_left(true));
+            assert_eq!(ClickToggle::Neither, ClickToggle::Left.set_left(false));
+            assert_eq!(ClickToggle::Right, ClickToggle::Both.set_left(false));
+        }
+
+        #[test]
+        fn set_lefts_will_remain() {
+            assert_eq!(ClickToggle::Neither, ClickToggle::Neither.set_left(false));
+            assert_eq!(ClickToggle::Right, ClickToggle::Right.set_left(false));
+            assert_eq!(ClickToggle::Both, ClickToggle::Both.set_left(true));
+            assert_eq!(ClickToggle::Left, ClickToggle::Left.set_left(true));
+        }
+
+        #[test]
+        fn set_rights_will_change() {
+            assert_eq!(ClickToggle::Right, ClickToggle::Neither.set_right(true));
+            assert_eq!(ClickToggle::Both, ClickToggle::Left.set_right(true));
+            assert_eq!(ClickToggle::Neither, ClickToggle::Right.set_right(false));
+            assert_eq!(ClickToggle::Left, ClickToggle::Both.set_right(false));
+        }
+
+        #[test]
+        fn set_rights_will_remain() {
+            assert_eq!(ClickToggle::Neither, ClickToggle::Neither.set_right(false));
+            assert_eq!(ClickToggle::Left, ClickToggle::Left.set_right(false));
+            assert_eq!(ClickToggle::Both, ClickToggle::Both.set_right(true));
+            assert_eq!(ClickToggle::Right, ClickToggle::Right.set_right(true));
+        }
     }
 
     mod toggle_states_string {
